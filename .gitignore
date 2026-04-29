@@ -1,0 +1,16 @@
+# binaries
+parallel_histogram
+*.o
+*.out
+
+# generated data/results
+results/
+*.csv
+*.pdf
+
+# editor/system
+.vscode/
+.DS_Store
+
+# temporary
+tmp/
