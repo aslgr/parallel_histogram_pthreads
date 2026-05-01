@@ -16,7 +16,8 @@ int serial_histogram(
 
         for (int b = 0; b < nbins; b++) 
         {
-            if (v >= limits[b] && v < limits[b + 1]) {
+            if ((b < nbins - 1 && v >= limits[b] && v < limits[b + 1]) ||
+                (b == nbins - 1 && v >= limits[b] && v <= limits[b + 1])) {
                 hist[b]++;
                 break;
             }

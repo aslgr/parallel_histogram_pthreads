@@ -4,6 +4,7 @@
 #include <time.h>
 #include "data_generation.h"
 #include "histogram.h"
+#include "build_limits.h"
 
 int main(int argc, char **argv) {
 
@@ -27,21 +28,43 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("First values:\n");
-    for (int i = 0; i < 5 && i < nelements; i++)
-        printf("data[%d] = %lld\n", i, data[i]);
+    long long *limits = malloc((nbins + 1) * sizeof(long long));
 
-    long long limits[] = {LLONG_MIN, 0, LLONG_MAX};
-    nbins = 2;
+    if (limits == NULL) {
+        fprintf(stderr, "Error: could not allocate limits array.\n");
+        free(data);
+        return 1;
+    }
+
+    if (build_limits(data, nelements, npivots, nbins, limits) != 0) {
+        fprintf(stderr, "Error: build_limits failed.\n");
+        free(data);
+        free(limits);
+        return 1;
+    }
+
     long long *hist = malloc(nbins * sizeof(long long));
+
+    if (hist == NULL) {
+        fprintf(stderr, "Error: could not allocate histogram.\n");
+        free(data);
+        free(limits);
+        return 1;
+    }
 
     serial_histogram(data, nelements, limits, nbins, hist);
 
-    for (int i = 0; i < nbins; i++)
-        printf("hist[%d] = %lld\n", i, hist[i]);
+    printf("First bins:\n");
+    for (int i = 0; i < nbins && i < 8; i++)
+    {
+        if (i == nbins - 1)
+            printf("bin %d: [%lld, %lld] -> %lld\n", i, limits[i], limits[i + 1], hist[i]);
+        else
+            printf("bin %d: [%lld, %lld) -> %lld\n", i, limits[i], limits[i + 1], hist[i]);
+    }
 
-    
     free(data);
+    free(limits);
     free(hist);
 
     return 0;

@@ -3,7 +3,7 @@ CFLAGS = -O3 -Wall -Wextra -pthread -Iinclude
 
 TARGET = parallel_histogram
 
-SRC = src/main.c src/data_generation.c src/histogram.c
+SRC = src/main.c src/data_generation.c src/histogram.c src/build_limits.c
 
 all:
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRC)
