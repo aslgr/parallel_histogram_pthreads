@@ -19,6 +19,31 @@ int main(int argc, char **argv) {
     int nthreads = atoi(argv[4]);
     int nr = atoi(argv[5]);
 
+    if (nelements <= 0) {
+        fprintf(stderr, "Error: nelements must be > 0.\n");
+        return 1;
+    }
+
+    if (nbins < 1) {
+        fprintf(stderr, "Error: nbins must be >= 1.\n");
+        return 1;
+    }
+
+    if (npivots < 2 || npivots < nbins || npivots > nelements) {
+        fprintf(stderr, "Error: npivots must be >= 2, >= nbins, and <= nelements.\n");
+        return 1;
+    }
+
+    if (nthreads < 1) {
+        fprintf(stderr, "Error: nthreads must be >= 1.\n");
+        return 1;
+    }
+
+    if (nr < 1) {
+        fprintf(stderr, "Error: nr must be >= 1.\n");
+        return 1;
+    }
+
     srand(time(NULL));
 
     long long *data = generate_data(nelements);
@@ -52,7 +77,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    serial_histogram(data, nelements, limits, nbins, hist);
+    if (parallel_histogram(data, nelements, limits, nbins, hist, nthreads) != 0) {
+        fprintf(stderr, "Error: parallel_histogram failed.\n");
+        free(data);
+        free(limits);
+        free(hist);
+        return 1;
+    }
 
     printf("First bins:\n");
     for (int i = 0; i < nbins && i < 8; i++)
