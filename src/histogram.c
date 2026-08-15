@@ -1,151 +1,257 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include "histogram.h"
 
-typedef struct {
-    const long long *data;
-    long long start;
-    long long end;
-    const long long *limits;
-    int nbins;
-    long long *private_hist;
-} ThreadArgs;
+static pthread_t hist_threads[MAX_THREADS];
+static int hist_thread_id[MAX_THREADS];
 
-static int find_bin_binary(
-    long long value,
-    const long long *limits,
-    int nbins) {
-    
+static pthread_barrier_t hist_barrier;
+
+static int hist_initialized = 0;
+static int hist_pool_nthreads = 0;
+
+static const long long *hist_pool_data = NULL;
+static const long long *hist_pool_limits = NULL;
+static long long hist_pool_nelements = 0;
+static int hist_pool_nbins = 0;
+
+static long long *hist_pool_private_hists = NULL;
+
+static int find_bin(long long value, const long long *limits, int nbins)
+{
     int left = 0;
-    int right = nbins - 1;
+    int right = nbins;
 
-    while (left <= right)
-    {
-        int mid = left + (right - left) / 2;
+    while (left < right) {
 
-        if (value < limits[mid]) {
-            right = mid - 1;
-        }
-        else if (mid < nbins - 1 && value >= limits[mid + 1]) {
+        int mid = (left + right) / 2;
+
+        if (value < limits[mid])
+            right = mid;
+        else
             left = mid + 1;
-        }
-        else {
-            return mid;
-        }
     }
 
-    return -1;
+    int bin = left - 1;
+
+    if (bin < 0)
+        bin = 0;
+
+    if (bin >= nbins)
+        bin = nbins - 1;
+
+    return bin;
 }
 
-static void compute_histogram_range(
-    const long long *data,
-    long long start,
-    long long end,
-    const long long *limits,
-    int nbins,
-    long long *hist) {
-    
-    for (int b = 0; b < nbins; b++)
-        hist[b] = 0;
+static void *hist_pool_worker(void *ptr) {
 
-    for (long long i = start; i < end; i++)
-    {
-        int bin = find_bin_binary(data[i], limits, nbins);
+    int tid = *((int *)ptr);
 
-        if (bin >= 0)
-            hist[bin]++;
+    while (1) {
+
+        pthread_barrier_wait(&hist_barrier);
+
+        long long base_chunk =
+            hist_pool_nelements / hist_pool_nthreads;
+
+        long long remainder =
+            hist_pool_nelements % hist_pool_nthreads;
+
+        long long start;
+        long long end;
+
+        if (tid < remainder) {
+
+            start = tid * (base_chunk + 1);
+            end = start + base_chunk + 1;
+
+        } else {
+
+            start =
+                remainder * (base_chunk + 1)
+                + (tid - remainder) * base_chunk;
+
+            end = start + base_chunk;
+        }
+
+        long long *local_hist =
+            hist_pool_private_hists
+            + ((long long)tid * hist_pool_nbins);
+
+        for (int b = 0; b < hist_pool_nbins; b++)
+            local_hist[b] = 0;
+
+        for (long long i = start; i < end; i++) {
+
+            int b = find_bin(
+                hist_pool_data[i],
+                hist_pool_limits,
+                hist_pool_nbins);
+
+            local_hist[b]++;
+        }
+
+        pthread_barrier_wait(&hist_barrier);
+
+        if (tid == 0)
+            return NULL;
     }
-}
-
-static void *thread_histogram(void *arg) {
-
-    ThreadArgs *args = (ThreadArgs *)arg;
-
-    compute_histogram_range(
-        args->data,
-        args->start,
-        args->end,
-        args->limits,
-        args->nbins,
-        args->private_hist);
 
     return NULL;
 }
 
-int parallel_histogram(
-    const long long *data,
-    long long nelements,
-    const long long *limits,
-    int nbins,
-    long long *hist,
-    int nthreads) {
-    
+static int hist_pool_init(int nthreads, int nbins) {
+
+    hist_pool_nthreads = nthreads;
+    hist_pool_nbins = nbins;
+
+    hist_pool_private_hists =
+        calloc(
+            (size_t)nthreads * nbins,
+            sizeof(long long));
+
+    if (!hist_pool_private_hists)
+        return -1;
+
+    if (pthread_barrier_init(
+            &hist_barrier,
+            NULL,
+            nthreads) != 0)
+        return -1;
+
+    hist_thread_id[0] = 0;
+
+    for (int i = 1; i < nthreads; i++) {
+
+        hist_thread_id[i] = i;
+
+        if (pthread_create(
+                &hist_threads[i],
+                NULL,
+                hist_pool_worker,
+                &hist_thread_id[i]) != 0) {
+
+            return -1;
+        }
+    }
+
+    hist_initialized = 1;
+
+    return 0;
+}
+
+int parallel_histogram(const long long *data, long long nelements, const long long *limits,
+                       int nbins, long long *hist, int nthreads) 
+{
     if (data == NULL || limits == NULL || hist == NULL)
         return -1;
 
-    if (nelements < 0 || nbins <= 0 || nthreads < 1)
-        return -1;
+    for (int i = 0; i < nbins; i++)
+        hist[i] = 0;
 
     if (nthreads == 1) {
-        compute_histogram_range(data, 0, nelements, limits, nbins, hist);
+        for (long long i = 0; i < nelements; i++) 
+        {
+            int b = find_bin(data[i], limits, nbins);
+            hist[b]++;
+        }
+
         return 0;
     }
 
-    for (int b = 0; b < nbins; b++)
-        hist[b] = 0;
-
-    pthread_t *threads = malloc(nthreads * sizeof(pthread_t));
-    ThreadArgs *args = malloc(nthreads * sizeof(ThreadArgs));
-    long long *private_hists = malloc((long long)nthreads * nbins * sizeof(long long));
-
-    if (threads == NULL || args == NULL || private_hists == NULL) {
-        free(threads);
-        free(args);
-        free(private_hists);
-        return -1;
-    }
-
-    long long base_chunk = nelements / nthreads;
-    long long remainder = nelements % nthreads;
-
-    long long start = 0;
-
-    for (int t = 0; t < nthreads; t++)
-    {
-        long long chunk_size = base_chunk + (t < remainder ? 1 : 0);
-        long long end = start + chunk_size;
-
-        args[t].data = data;
-        args[t].start = start;
-        args[t].end = end;
-        args[t].limits = limits;
-        args[t].nbins = nbins;
-        args[t].private_hist = private_hists + ((long long)t * nbins);
-
-        if (pthread_create(&threads[t], NULL, thread_histogram, &args[t]) != 0) {
-            free(threads);
-            free(args);
-            free(private_hists);
+    if (!hist_initialized) {
+        if (hist_pool_init(nthreads, nbins) != 0)
             return -1;
-        }
-
-        start = end;
     }
 
-    for (int t = 0; t < nthreads; t++)
-        pthread_join(threads[t], NULL);
+    if (nthreads != hist_pool_nthreads || nbins != hist_pool_nbins)
+        return -1;
 
-    for (int t = 0; t < nthreads; t++)
+    hist_pool_data = data;
+    hist_pool_limits = limits;
+    hist_pool_nelements = nelements;
+
+    hist_pool_worker(&hist_thread_id[0]);
+
+    for (int t = 0; t < nthreads; t++) 
     {
-        long long *local_hist = private_hists + ((long long)t * nbins);
+        long long *local_hist = hist_pool_private_hists + ((long long)t * nbins);
 
         for (int b = 0; b < nbins; b++)
             hist[b] += local_hist[b];
     }
 
-    free(threads);
-    free(args);
-    free(private_hists);
-
     return 0;
+}
+
+int verify_histogram(const long long *data, long long nelements, const long long *limits,
+                     int nbins, const long long *hist_1thr, const long long *hist_nthr)
+{
+    int s1_ok = 1;
+
+    for (int b = 0; b < nbins; b++) 
+    {
+        if (hist_1thr[b] != hist_nthr[b]) {
+            fprintf(stderr," VERIFY FAIL stage 1: bin %d 1thr=%lld Nthr=%lld\n",
+                    b, hist_1thr[b], hist_nthr[b]);
+
+            s1_ok = 0;
+        }
+    }
+
+    if (!s1_ok)
+        return 0;
+
+    long long *recount = calloc(nbins, sizeof(long long));
+
+    if (!recount) {
+        perror("calloc recount");
+        return 0;
+    }
+
+    for (long long i = 0; i < nelements; i++)
+    {
+        long long v = data[i];
+        int b = 0;
+
+        while (b < nbins - 1 && v >= limits[b + 1])
+            b++;
+
+        recount[b]++;
+    }
+
+    int s2_ok = 1;
+
+    for (int b = 0; b < nbins; b++)
+    {
+        if (recount[b] != hist_nthr[b]) {
+
+            fprintf(stderr," VERIFY FAIL stage 2: bin %d recount=%lld Nthr=%lld\n",
+                    b, recount[b], hist_nthr[b]);
+
+            s2_ok = 0;
+        }
+    }
+
+    free(recount);
+
+    if (!s2_ok)
+        return 0;
+
+    long long total = 0;
+
+    for (int b = 0; b < nbins; b++)
+        total += hist_nthr[b];
+
+    if (total != nelements) {
+        fprintf(stderr," VERIFY FAIL stage 3: sum=%lld expected=%lld\n",
+                total, nelements);
+
+        return 0;
+    }
+
+    return 1;
 }

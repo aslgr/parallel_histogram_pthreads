@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O3 -Wall -Wextra -pthread -Iinclude -pthread
+CFLAGS = -O3 -Wall -Wextra -pthread -Iinclude
 
 TARGET = parallel_histogram
 

@@ -1,9 +1,10 @@
 #include <stdlib.h>
 #include <limits.h>
+#include "data_generation.h"
 #include "build_limits.h"
 
-static int cmp(const void *a, const void *b) {
-
+static int cmp(const void *a, const void *b)
+{
     long long x = *(const long long *)a;
     long long y = *(const long long *)b;
 
@@ -12,44 +13,47 @@ static int cmp(const void *a, const void *b) {
     return 0;
 }
 
-int build_limits(
-    const long long *data,
-    long long nelements,
-    int npivots,
-    int nbins,
-    long long *limits) {
+int build_limits(const long long *data, long long nelements, int npivots,
+                 int nbins, long long *pivots, long long *limits)
+{
 
-    long long *pivots = malloc(npivots * sizeof(long long));
-
-    if (pivots == NULL) 
+    if (data == NULL || pivots == NULL || limits == NULL)
         return -1;
 
     long long stride = nelements / npivots;
 
     for (int i = 0; i < npivots; i++)
     {
-        long long jitter = rand() % stride;
-        long long idx = i * stride + jitter;
+        long long jitter = (long long)(random_63() % (unsigned long long)stride);
+        long long idx = (long long)i * stride + jitter;
         pivots[i] = data[idx];
     }
 
     qsort(pivots, npivots, sizeof(long long), cmp);
 
-    for (int i = 0; i <= nbins; i++)
-    {
-        int idx = i * (npivots - 1) / nbins;
-        limits[i] = pivots[idx];
-    }
-
     limits[0] = LLONG_MIN;
     limits[nbins] = LLONG_MAX;
 
-    for (int i = 1; i <= nbins; i++)
+    for (int k = 1; k < nbins; k++)
     {
-        if (limits[i] <= limits[i - 1])
-            limits[i] = limits[i - 1] + 1;
+        int idx = (k * npivots) / nbins;
+
+        if (idx >= npivots)
+            idx = npivots - 1;
+
+        limits[k] = pivots[idx];
     }
-    
-    free(pivots);
+
+    for (int k = 1; k < nbins; k++)
+    {
+        if (limits[k] <= limits[k - 1]) {
+
+            if (limits[k - 1] < LLONG_MAX - 1)
+                limits[k] = limits[k - 1] + 1;
+            else
+                limits[k] = limits[k - 1];
+        }
+    }
+
     return 0;
 }
